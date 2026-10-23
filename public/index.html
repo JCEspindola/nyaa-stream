@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nyaa Stream</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237b5bf5'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <a href="#/" class="brand"><span class="logo">▶</span> Nyaa Stream</a>
+    <form class="search" id="search-form" role="search">
+      <input id="search-input" type="search" placeholder="Search nyaa.si…" autocomplete="off" aria-label="Search">
+    </form>
+    <nav class="nav">
+      <a href="#/" data-nav="discover">Discover</a>
+      <a href="#/continue" data-nav="continue">Continue</a>
+      <a href="#/about" data-nav="about">About</a>
+    </nav>
+  </header>
+  <main id="view"></main>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

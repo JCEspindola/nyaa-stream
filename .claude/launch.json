@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nyaa-stremio",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/index.js"],
+      "port": 11471
+    }
+  ]
+}
