@@ -1,0 +1,87 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Version comes from the repo's package.json, like the Windows build.
+def pkg = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def (vMajor, vMinor, vPatch) = pkg.version.tokenize('.').collect { it.replaceAll(/\D.*/, '').toInteger() }
+
+android {
+    namespace 'com.nyaastream.app'
+    compileSdk 36 // libVLC 3.7 requires it; targetSdk below is what changes app behaviour
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'com.nyaastream.app'
+        minSdk 24
+        targetSdk 35
+        versionCode vMajor * 10000 + vMinor * 100 + vPatch
+        versionName pkg.version
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+    }
+
+    // One APK per CPU type: phones are arm64-v8a (older ones armeabi-v7a),
+    // emulators x86_64. Each carries one Node runtime and one libVLC.
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            universalApk false
+        }
+    }
+
+    // Release signing comes from the environment (CI secrets); without it the
+    // debug key is used so local builds still install.
+    signingConfigs {
+        release {
+            if (System.getenv('NYAA_KEYSTORE')) {
+                storeFile file(System.getenv('NYAA_KEYSTORE'))
+                storePassword System.getenv('NYAA_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('NYAA_KEY_ALIAS')
+                keyPassword System.getenv('NYAA_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('NYAA_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libnode/bin']
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+            // Both libVLC and our bridge ship the C++ runtime; keep one copy.
+            pickFirsts += ['**/libc++_shared.so']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'org.videolan.android:libvlc-all:3.7.7'
+}

@@ -3,24 +3,32 @@
 // be installed into real Stremio from http://127.0.0.1:<port>/addon/manifest.json
 import { Router } from 'express';
 import * as nyaa from './nyaa.js';
-import { parseEpisode, guessFileIdx, prettyTitle, groupOf, formatBytes, VIDEO_EXT, MEDIA_EXT } from './names.js';
+import * as anilist from './anilist.js';
+import { seriesTorrents, episodeTorrents } from './series.js';
+import { NYAA_TRACKERS } from './engine.js';
+import { parseEpisode, parseQuality, guessFileIdx, prettyTitle, groupOf, formatBytes, VIDEO_EXT, MEDIA_EXT } from './names.js';
 
 const ID_PREFIX = 'nyaa:';
+const SERIES_PREFIX = 'anilist:';
 const CATEGORY_BY_NAME = Object.fromEntries(Object.entries(nyaa.CATEGORIES).map(([k, v]) => [v, k]));
+const SERIES_CATALOGS = { 'anilist-season': 'season', 'anilist-trending': 'trending', 'anilist-popular': 'popular' };
 
 export const manifest = {
   id: 'community.nyaa.stremio-lite',
-  version: '1.0.0',
+  version: '1.1.0',
   name: 'Nyaa',
-  description: 'Torrents from nyaa.si: browse, search and stream episodes.',
+  description: 'Anime series (AniList catalog) with torrents from nyaa.si, plus raw nyaa browsing.',
   resources: [
     'catalog',
-    { name: 'meta', types: ['series'], idPrefixes: [ID_PREFIX] },
-    { name: 'stream', types: ['series'], idPrefixes: [ID_PREFIX] },
+    { name: 'meta', types: ['series'], idPrefixes: [ID_PREFIX, SERIES_PREFIX] },
+    { name: 'stream', types: ['series'], idPrefixes: [ID_PREFIX, SERIES_PREFIX] },
   ],
   types: ['series'],
-  idPrefixes: [ID_PREFIX],
+  idPrefixes: [ID_PREFIX, SERIES_PREFIX],
   catalogs: [
+    { type: 'series', id: 'anilist-season', name: 'Anime: Airing this season', extra: [{ name: 'skip' }] },
+    { type: 'series', id: 'anilist-trending', name: 'Anime: Trending', extra: [{ name: 'search' }, { name: 'skip' }] },
+    { type: 'series', id: 'anilist-popular', name: 'Anime: All-time popular', extra: [{ name: 'skip' }] },
     {
       type: 'series',
       id: 'nyaa-latest',
@@ -29,6 +37,8 @@ export const manifest = {
         { name: 'search' },
         { name: 'skip' },
         { name: 'genre', options: Object.values(nyaa.CATEGORIES) },
+        { name: 'words' },
+        { name: 'fansub' },
       ],
     },
     {
@@ -39,6 +49,8 @@ export const manifest = {
         { name: 'search' },
         { name: 'skip' },
         { name: 'genre', options: Object.values(nyaa.CATEGORIES) },
+        { name: 'words' },
+        { name: 'fansub' },
       ],
     },
   ],
@@ -55,6 +67,7 @@ function parseExtra(str) {
 }
 
 function toMetaPreview(req, r) {
+  const quality = parseQuality(r.title);
   return {
     id: ID_PREFIX + r.id,
     type: 'series',
@@ -62,24 +75,159 @@ function toMetaPreview(req, r) {
     poster: posterUrl(req, prettyTitle(r.title)),
     posterShape: 'landscape',
     releaseInfo: r.date?.slice(0, 10),
-    description: `${r.size} · ${r.seeders} seeders · ${r.leechers} leechers${r.trusted ? ' · trusted' : ''}`,
+    description: `${quality} · ${r.size} · ${r.seeders} seeders · ${r.leechers} leechers`,
     // Not part of the Stremio spec; the bundled UI uses it for its table view.
-    nyaa: r,
+    nyaa: { ...r, quality },
   };
 }
 
+// ---------- series (AniList catalog + nyaa streams) ----------
+
+function toSeriesPreview(m) {
+  return {
+    id: SERIES_PREFIX + m.id,
+    type: 'series',
+    name: anilist.displayTitle(m),
+    poster: m.coverImage?.extraLarge || m.coverImage?.large,
+    posterShape: 'poster',
+    releaseInfo: m.seasonYear ? String(m.seasonYear) : undefined,
+    genres: m.genres,
+    // Not part of the Stremio spec; used by the bundled UI.
+    anilist: {
+      format: m.format,
+      status: m.status,
+      episodes: m.episodes,
+      score: m.averageScore,
+      nextAiringEpisode: m.nextAiringEpisode,
+      romaji: m.title.romaji,
+      color: m.coverImage?.color,
+    },
+  };
+}
+
+async function seriesCatalog(id, extra) {
+  const skip = Number(extra.skip) || 0;
+  const page = Math.floor(skip / anilist.PER_PAGE) + 1;
+  const kind = extra.search ? 'search' : SERIES_CATALOGS[id];
+  const { media, hasNextPage } = await anilist.list(kind, { page, search: extra.search });
+  return { metas: media.map(toSeriesPreview), hasMore: hasNextPage, nextSkip: page * anilist.PER_PAGE };
+}
+
+async function seriesMeta(id) {
+  const m = await anilist.getMedia(id.slice(SERIES_PREFIX.length).split(':')[0]);
+  let episodes = anilist.episodesOf(m);
+  // Finished shows without an episode count: use the highest episode on nyaa.
+  if (!episodes.length && m.status !== 'NOT_YET_RELEASED') {
+    const found = await seriesTorrents(m).catch(() => ({ episodes: {} }));
+    episodes = anilist.episodesOf(m, Math.max(0, ...Object.keys(found.episodes).map(Number)));
+  }
+  const preview = toSeriesPreview(m);
+  return {
+    meta: {
+      ...preview,
+      background: m.bannerImage || preview.poster,
+      description: anilist.plainDescription(m.description),
+      runtime: m.duration ? `${m.duration} min` : undefined,
+      links: [{ name: 'AniList', category: 'Source', url: `https://anilist.co/anime/${m.id}` }],
+      videos: episodes.map((e) => ({
+        id: `${SERIES_PREFIX}${m.id}:${e.episode}`,
+        title: e.title,
+        season: 1,
+        episode: e.episode,
+        released: e.released,
+        thumbnail: e.thumbnail,
+      })),
+      anilist: {
+        ...preview.anilist,
+        id: m.id,
+        native: m.title.native,
+        studio: m.studios?.nodes?.[0]?.name,
+        relations: (m.relations?.edges || [])
+          .filter((e) => e.node.type === 'ANIME' && ['PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY', 'SPIN_OFF'].includes(e.relationType))
+          .map((e) => ({ id: SERIES_PREFIX + e.node.id, relation: e.relationType, format: e.node.format, name: e.node.title.english || e.node.title.romaji, poster: e.node.coverImage?.large })),
+      },
+    },
+  };
+}
+
+/** Which file of a season pack holds the episode; null if none clearly does. */
+async function packFileIdx(t, ep) {
+  const torrent = await nyaa.getTorrent(t.id);
+  const file = torrent.files.find((f) => VIDEO_EXT.test(f.path) && parseEpisode(f.path).episode === ep);
+  return file ? file.idx : null;
+}
+
+const MAX_PACKS = 10;
+
+async function seriesStream(id) {
+  const [, seriesId, epStr] = id.split(':');
+  const ep = Number(epStr);
+  if (!Number.isInteger(ep)) return { streams: [] };
+  const m = await anilist.getMedia(seriesId);
+  const { singles, packs } = await episodeTorrents(m, ep);
+  // Packs need their file list to point at the right episode; fetch the best-seeded few.
+  const resolved = await Promise.all(packs.slice(0, MAX_PACKS).map(async (t) => {
+    const fileIdx = await packFileIdx(t, ep).catch(() => null);
+    return fileIdx === null ? null : { ...t, fileIdx };
+  }));
+  const toStream = (t) => ({
+    name: `Nyaa\n${t.quality}`,
+    title: `${t.title}\n👤 ${t.seeders}  💾 ${t.size}${t.batch ? '  📦 pack' : ''}`,
+    infoHash: t.infoHash,
+    ...(t.fileIdx !== undefined ? { fileIdx: t.fileIdx } : {}),
+    sources: [...NYAA_TRACKERS.map((a) => `tracker:${a}`), `dht:${t.infoHash}`],
+    behaviorHints: { bingeGroup: `nyaa|${t.group || ''}|${t.quality}` },
+    nyaa: t,
+  });
+  return { streams: [...singles, ...resolved.filter(Boolean)].map(toStream) };
+}
+
+/**
+ * Not part of the Stremio protocol: per-episode torrent summary for the
+ * series page (count, best seeders, qualities, groups) plus season packs.
+ */
+export async function seriesSummary(id) {
+  const m = await anilist.getMedia(id.slice(SERIES_PREFIX.length));
+  const { episodes, batches } = await seriesTorrents(m);
+  const summary = {};
+  for (const [ep, list] of Object.entries(episodes)) {
+    summary[ep] = {
+      count: list.length,
+      seeders: Math.max(...list.map((t) => t.seeders)),
+      qualities: [...new Set(list.map((t) => t.quality))],
+      groups: [...new Set(list.map((t) => t.group).filter(Boolean))],
+    };
+  }
+  return { episodes: summary, packs: batches };
+}
+
+// ---------- raw nyaa catalogs ----------
+
 export async function catalog(req, id, extra) {
+  if (id in SERIES_CATALOGS) return seriesCatalog(id, extra);
   const skip = Number(extra.skip) || 0;
   const page = Math.floor(skip / nyaa.PAGE_SIZE) + 1;
   const opts = {
     c: CATEGORY_BY_NAME[extra.genre] || extra.c || '1_2',
-    f: extra.f ?? 0,
     s: id === 'nyaa-popular' ? 'seeders' : extra.s || 'id',
     o: extra.o || 'desc',
     p: page,
   };
-  const results = await nyaa.search(extra.search || '', opts);
-  return { metas: results.map((r) => toMetaPreview(req, r)), hasMore: results.length >= nyaa.PAGE_SIZE };
+  // `words` uses nyaa's own syntax (word, -word, "phrase"), so it narrows the
+  // search on the site and paging stays correct. The fansub name is searched
+  // too, then checked strictly against the leading [Group] tag.
+  const fansub = (extra.fansub || '').trim();
+  const query = [extra.search, extra.words, fansub && `"${fansub.replace(/"/g, '')}"`].filter(Boolean).join(' ');
+  const results = await nyaa.search(query, opts);
+  const wanted = fansub.toLowerCase();
+  const kept = wanted ? results.filter((r) => groupOf(r.title)?.toLowerCase() === wanted) : results;
+  return {
+    metas: kept.map((r) => toMetaPreview(req, r)),
+    hasMore: results.length >= nyaa.PAGE_SIZE,
+    // Not part of the Stremio spec: where the next page starts, since strict
+    // fansub filtering can return fewer items than a full nyaa page.
+    nextSkip: page * nyaa.PAGE_SIZE,
+  };
 }
 
 function videosFor(t) {
@@ -104,6 +252,7 @@ function videosFor(t) {
 }
 
 export async function meta(req, id) {
+  if (id.startsWith(SERIES_PREFIX)) return seriesMeta(id);
   const nyaaId = id.slice(ID_PREFIX.length).split(':')[0];
   const [t, view] = await Promise.all([nyaa.getTorrent(nyaaId), nyaa.getView(nyaaId).catch(() => ({}))]);
   const name = view.title || t.name;
@@ -133,6 +282,7 @@ export async function meta(req, id) {
 }
 
 export async function stream(req, id) {
+  if (id.startsWith(SERIES_PREFIX)) return seriesStream(id);
   const [nyaaId, idxStr] = id.slice(ID_PREFIX.length).split(':');
   const t = await nyaa.getTorrent(nyaaId);
   const fileIdx = idxStr !== undefined ? Number(idxStr) : guessFileIdx(t.files);
@@ -200,6 +350,7 @@ export function addonRouter() {
     catalog(req, req.params[1], parseExtra(req.params[2] && decodeURIComponent(req.params[2])))));
   router.get(/^\/meta\/([^/]+)\/(.+)\.json$/, wrap((req) => meta(req, decodeURIComponent(req.params[1]))));
   router.get(/^\/stream\/([^/]+)\/(.+)\.json$/, wrap((req) => stream(req, decodeURIComponent(req.params[1]))));
+  router.get(/^\/series-torrents\/(anilist:\d+)\.json$/, wrap((req) => seriesSummary(decodeURIComponent(req.params[0]))));
   router.get('/poster.svg', (req, res) => {
     res.setHeader('Content-Type', 'image/svg+xml');
     res.setHeader('Cache-Control', 'max-age=86400');

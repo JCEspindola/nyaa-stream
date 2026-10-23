@@ -33,13 +33,21 @@ async function get(url, as = 'text') {
 
 /**
  * Search nyaa. Options mirror the site's query string:
- *   c (category), f (0 none / 1 no remakes / 2 trusted only),
- *   s (id|seeders|leechers|downloads|size|comments), o (asc|desc), p (page, 1-based)
+ *   c (category), s (id|seeders|leechers|downloads|size|comments),
+ *   o (asc|desc), p (page, 1-based)
  */
-export async function search(query = '', { c = '1_2', f = 0, s = 'id', o = 'desc', p = 1 } = {}) {
-  const qs = new URLSearchParams({ f: String(f), c, q: query, s, o, p: String(p) });
-  const html = await get(`${BASE}/?${qs}`);
-  return parseListing(html);
+const searchCache = new Map();
+const SEARCH_TTL = 10 * 60e3;
+
+export async function search(query = '', { c = '1_2', s = 'id', o = 'desc', p = 1 } = {}) {
+  const qs = new URLSearchParams({ f: '0', c, q: query, s, o, p: String(p) });
+  const key = qs.toString();
+  const hit = searchCache.get(key);
+  if (hit && Date.now() - hit.t < SEARCH_TTL) return hit.results;
+  const results = parseListing(await get(`${BASE}/?${qs}`));
+  searchCache.set(key, { t: Date.now(), results });
+  if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value);
+  return results;
 }
 
 export function parseListing(html) {
@@ -48,7 +56,6 @@ export function parseListing(html) {
   const rows = body.split('</tbody>')[0].split(/<tr\b/).slice(1);
   const out = [];
   for (const row of rows) {
-    const cls = /class="([^"]*)"/.exec(row)?.[1] || 'default';
     const category = /href="\/\?c=(\d_\d)"/.exec(row)?.[1];
     // The title link is the /view/ID link without "#comments".
     const title = /<a href="\/view\/(\d+)" title="([^"]*)"/.exec(row);
@@ -67,8 +74,6 @@ export function parseListing(html) {
       seeders: Number(cells[2]) || 0,
       leechers: Number(cells[3]) || 0,
       downloads: Number(cells[4]) || 0,
-      trusted: cls.includes('success'),
-      remake: cls.includes('danger'),
     });
   }
   return out;

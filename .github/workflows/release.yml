@@ -1,0 +1,95 @@
+# Builds the Windows .exe and the Android APKs, and publishes them as a GitHub
+# release when a version tag (v1.2.3) is pushed. Can also be run by hand from
+# the Actions tab; then the files are attached to the run instead.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/NyaaStream.exe
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Android SDK packages
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" > /dev/null
+      - run: npm ci
+      - run: node scripts/build-android-assets.mjs
+      - name: Build signed APKs
+        env:
+          KEYSTORE_BASE64: ${{ secrets.NYAA_KEYSTORE_BASE64 }}
+          NYAA_KEYSTORE_PASSWORD: ${{ secrets.NYAA_KEYSTORE_PASSWORD }}
+          NYAA_KEY_ALIAS: ${{ secrets.NYAA_KEY_ALIAS }}
+          NYAA_KEY_PASSWORD: ${{ secrets.NYAA_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export NYAA_KEYSTORE="$RUNNER_TEMP/release.jks"
+          else
+            echo "::warning::No signing key configured; APKs are signed with a throwaway debug key."
+          fi
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleRelease --no-daemon
+      - name: Name APKs
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir out
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            abi=$(basename "$apk" .apk | sed -E 's/^app-(.*)-release(-unsigned)?$/\1/')
+            cp "$apk" "out/NyaaStream-$version-$abi.apk"
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/*.apk
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp artifacts/windows/NyaaStream.exe "artifacts/NyaaStream-$version-windows.exe"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Nyaa Stream $version" \
+            --notes-file .github/release-notes.md \
+            "artifacts/NyaaStream-$version-windows.exe" artifacts/android/*.apk

@@ -8,7 +8,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { Router } from 'express';
 import { createEngine } from './engine.js';
 
-const SUBS_DIR = path.join(os.tmpdir(), 'nyaa-stremio-subs');
+// NYAA_TMP_DIR: on Android os.tmpdir() ignores TMPDIR and returns an unwritable /tmp.
+const SUBS_DIR = path.join(process.env.NYAA_TMP_DIR || os.tmpdir(), 'nyaa-stremio-subs');
 fs.mkdirSync(SUBS_DIR, { recursive: true });
 
 const TEXT_SUB_CODECS = new Set(['ass', 'ssa', 'subrip', 'srt', 'mov_text', 'webvtt', 'text']);

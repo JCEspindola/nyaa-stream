@@ -61,6 +61,121 @@ export function guessFileIdx(files, hint = {}) {
   return files.indexOf(largest);
 }
 
+// Pre-release sources are reported even when a resolution is present, since
+// "CamRip 720p" is still a cam. Other sources are only a fallback.
+const LOW_SOURCES = [
+  [/\b(?:HD)?CAM(?:Rip)?\b/i, 'CamRip'],
+  // Uppercase only, and not a ".ts" file extension.
+  [/\b(?:HD-?TS|TELESYNC|PDVD)\b|(?<!\.)\bTS\b/, 'Telesync'],
+  [/\b(?:DVD)?SCR(?:EENER)?\b/i, 'Screener'],
+];
+const OTHER_SOURCES = [
+  [/\bBlu-?Ray\b|\bBD(?:Rip|Remux|MV)?\b/i, 'BD'],
+  [/\bWEB(?:-?DL|-?Rip)?\b/i, 'WEB'],
+  [/\b(?:AMZN|DSNP|NF|HULU|HMAX|ATVP|CR)\b/, 'WEB'],
+  [/\bHDTV(?:Rip)?\b/i, 'HDTV'],
+  [/\bDVD(?:Rip|5|9)?\b/i, 'DVD'],
+  [/\bVHS(?:Rip)?\b/i, 'VHSRip'],
+  [/\bLD(?:Rip)?\b|\bLaserDisc\b/i, 'LaserDisc'],
+];
+
+/** Quality label for a release title: CamRip, 2160p, 1080p, …, BD, or "Unknown". */
+export function parseQuality(title) {
+  for (const [re, label] of LOW_SOURCES) if (re.test(title)) return label;
+  if (/\b(?:2160p|4K|UHD)\b/i.test(title)) return '2160p';
+  const p = /\b(\d{3,4})[pi]\b/i.exec(title);
+  if (p) return `${p[1]}p`;
+  const wh = /\b\d{3,4}\s?[x×]\s?(\d{3,4})\b/.exec(title);
+  if (wh) return `${wh[1]}p`;
+  for (const [re, label] of OTHER_SOURCES) if (re.test(title)) return label;
+  return 'Unknown';
+}
+
+const SEASON_RE = [
+  /\bS(\d{1,2})(?=E\d|\b)/i,
+  /\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b/i,
+  /\bSeason\s*(\d{1,2})\b/i,
+];
+const SEASON_STRIP = /\bS\d{1,2}(?=E\d|\b)|\b\d{1,2}(?:st|nd|rd|th)\s+Season\b|\bSeason\s*\d{1,2}\b/gi;
+// Bracketed/parenthesised text that is release info rather than an alternate title.
+const TAG_WORDS = /\b(\d{3,4}p|bd|bdrip|web|web-?dl|webrip|hevc|avc|x26[45]|h\.?26[45]|aac|flac|opus|ac3|dual|multi|batch|complete|dub|sub|raw|hdr|weekly|10.?bit|remux|v\d|eng|jpn|uncensored|vostfr|\d+-\d+)\b/i;
+
+/** Season number in a title ("S2", "2nd Season", "Season 2"); 1 when absent. */
+export function parseSeason(title) {
+  for (const re of SEASON_RE) {
+    const m = re.exec(title);
+    if (m) return Number(m[1]);
+  }
+  return 1;
+}
+
+// Written as explicit ranges rather than \p{L}/\p{N}: the Android build's Node
+// (nodejs-mobile) has no Unicode property data, so \p{…} regexes fail there.
+// Separators: ASCII/Latin-1 punctuation and symbols, general punctuation,
+// arrows/symbols/dingbats, CJK and fullwidth punctuation, katakana middle dot.
+const SEPARATORS = /[\s\u0000-/:-@[-`{-¿×÷ -⁯←-⯿⸀-⹿　-〿・︐-﹯！-／：-＠［-｀｛-･]+/g;
+// Two or more letters in a common script (Latin, Greek, Cyrillic, kana, CJK, Hangul).
+const HAS_WORD = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿ぀-ヺー-ヿ㐀-鿿가-힯]{2,}/;
+
+const nfkc = (s) => {
+  try { return s.normalize('NFKC'); } catch { return s; }
+};
+
+/** Lower-case, punctuation-free, season-free form used to compare titles. */
+export function normalizeTitle(s) {
+  return nfkc(s)
+    .replace(SEASON_STRIP, ' ')
+    .replace(/['’`]/g, '')
+    .toLowerCase()
+    .replace(SEPARATORS, ' ')
+    .trim();
+}
+
+/**
+ * Break a release name into what the series matcher needs:
+ *   names     candidate series titles (normalised); alternatives after "|" or in parentheses
+ *   season    1 unless the title says otherwise
+ *   episode   single episode number, or null
+ *   range     [from, to] for multi-episode packs, or null
+ *   batch     true for packs (ranges, "Batch", "Complete", whole-season releases)
+ */
+export function parseRelease(title) {
+  const group = groupOf(title);
+  let t = title.replace(/^\s*(\[[^\]]*\]\s*)+/, '').replace(/\.(mkv|mp4|avi)$/i, '');
+  const season = parseSeason(t);
+
+  let episode = null;
+  let range = null;
+  let m;
+  if ((m = /\bS\d{1,2}E(\d{1,4})(?:\s?[-~]\s?(?:S\d{1,2})?E?(\d{1,4}))?/i.exec(t))) {
+    if (m[2]) range = [Number(m[1]), Number(m[2])];
+    else episode = Number(m[1]);
+  } else if ((m = /(?:\s-\s|\(|\[|\bE(?:p|pisodes?)?\.?\s?)(\d{1,4})\s?(?:-|~|to)\s?(\d{1,4})(?:v\d)?(?=\s|\)|\]|$)/i.exec(t))) {
+    range = [Number(m[1]), Number(m[2])];
+  } else if ((m = /\s-\s(\d{1,4})(?:v\d)?(?=\s|\[|\(|$)/.exec(t))) {
+    episode = Number(m[1]);
+  } else if ((m = /\b(?:E|EP|Episode)\.?\s?(\d{1,4})(?:v\d)?\b/i.exec(t))) {
+    episode = Number(m[1]);
+  }
+  if (range && range[0] === range[1]) { episode = range[0]; range = null; }
+  if (range && range[0] > range[1]) range = null;
+  const batch = !!range || (episode === null && (/\b(batch|complete|bd|bdrip|blu-?ray|season)\b/i.test(t) || /\bS\d{1,2}\b/i.test(t)));
+
+  // The title is everything before the first episode/season/tag marker.
+  const alternatives = [];
+  for (const seg of t.split(/\s\|\s|\s\/\s/)) {
+    for (const p of seg.matchAll(/\(([^()]+)\)/g)) {
+      if (HAS_WORD.test(p[1]) && !TAG_WORDS.test(p[1])) alternatives.push(p[1]);
+    }
+    // " - " only ends the title when an episode/season/pack marker follows it,
+    // so "Frieren - Beyond Journey's End" stays whole.
+    const cut = seg.search(/\s-\s(?=S\d|E\d|\d|BD\b|Batch|Season|Vol|Complete)|\[|\(|\bS\d{1,2}E\d|\bE\d{1,4}\b|\b\d{3,4}p\b|\bS\d{1,2}\b|\b\d{1,2}(?:st|nd|rd|th)\s+Season\b|\bSeason\s*\d/i);
+    alternatives.push(cut > 0 ? seg.slice(0, cut) : seg);
+  }
+  const names = [...new Set(alternatives.map(normalizeTitle).filter((n) => n.length >= 2))];
+  return { group, names, season, episode, range, batch };
+}
+
 /** Strip "[Group]" and trailing tag blocks for a friendlier display title. */
 export function prettyTitle(name) {
   const t = name

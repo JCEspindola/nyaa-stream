@@ -11,13 +11,18 @@ import { addonRouter } from './addon.js';
 import { engineRouter, CACHE_ROOT } from './engine.js';
 import { transcodeRouter, setLocalBase, FFMPEG, FFPROBE } from './transcode.js';
 import * as external from './external.js';
+import { libraryRouter } from './library.js';
+import { syncRouter, DATA_DIR } from './sync.js';
 
-const PORT = Number(process.env.PORT) || 11471;
+let PORT = Number(process.env.PORT) || 11471;
 const HOST = process.env.HOST || '127.0.0.1';
-const root = path.dirname(fileURLToPath(import.meta.url));
+// The packaged .exe unpacks the UI elsewhere and says where via PUBLIC_DIR.
+const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 const app = express();
 app.disable('x-powered-by');
+// Behind a reverse proxy, set TRUST_PROXY (e.g. "1") so rate limits see the real client IP.
+if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
 app.use('/addon', addonRouter());
 app.use('/engine', engineRouter());
 app.use('/transcode', transcodeRouter());
@@ -43,20 +48,51 @@ api.get('/playlist.m3u', (req, res) => {
   res.send(`#EXTM3U\n#EXTINF:-1,${String(title).replace(/[\r\n]/g, ' ')}\nhttp://127.0.0.1:${PORT}/engine/${ih.toLowerCase()}/${idx}\n`);
 });
 app.use('/api', api);
+app.use('/api', libraryRouter());
+app.use('/api', syncRouter());
 
-app.use(express.static(path.join(root, '..', 'public')));
+app.use(express.static(PUBLIC_DIR));
 
-app.listen(PORT, HOST, () => {
+function openBrowser(url) {
+  const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
+  exec(cmd);
+}
+
+/** True when a Nyaa Stream server already answers on this port. */
+async function isNyaaStream(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/addon/manifest.json`, { signal: AbortSignal.timeout(2000) });
+    return (await res.json()).id === 'community.nyaa.stremio-lite';
+  } catch {
+    return false;
+  }
+}
+
+// Port taken: if it is another copy of this app (e.g. the .exe started twice),
+// just open that one; otherwise try the next few ports.
+const server = app.listen(PORT, HOST);
+server.on('error', async (err) => {
+  if (err.code !== 'EADDRINUSE') throw err;
+  if (await isNyaaStream(PORT)) {
+    console.log(`Nyaa Stream is already running at http://127.0.0.1:${PORT}`);
+    if (process.argv.includes('--open')) openBrowser(`http://127.0.0.1:${PORT}`);
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
+  if (process.env.PORT || PORT >= 11481) throw err;
+  PORT += 1;
+  server.listen(PORT, HOST);
+});
+
+server.on('listening', () => {
   const base = `http://${HOST === '0.0.0.0' ? '127.0.0.1' : HOST}:${PORT}`;
   setLocalBase(`http://127.0.0.1:${PORT}`);
   console.log(`Nyaa Stream running at ${base}`);
   console.log(`  addon manifest: ${base}/addon/manifest.json`);
   console.log(`  cache:          ${CACHE_ROOT}`);
+  console.log(`  sync data:      ${DATA_DIR}`);
   console.log(`  ffmpeg:         ${FFMPEG || 'not found (browser compatibility mode disabled)'}`);
   console.log(`  ffprobe:        ${FFPROBE || 'not found'}`);
   console.log(`  players:        ${external.players.map((p) => p.name).join(', ') || 'none detected'}`);
-  if (process.argv.includes('--open')) {
-    const cmd = process.platform === 'win32' ? `start "" "${base}"` : process.platform === 'darwin' ? `open ${base}` : `xdg-open ${base}`;
-    exec(cmd);
-  }
+  if (process.argv.includes('--open')) openBrowser(base);
 });

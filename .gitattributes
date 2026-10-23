@@ -1,0 +1,5 @@
+# gradlew must keep Unix line endings to run on Linux CI; .bat files want CRLF.
+android/gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary
