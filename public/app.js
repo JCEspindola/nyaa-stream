@@ -1237,6 +1237,19 @@ async function player(params, id, idxStr) {
   view.innerHTML = `
     <div class="player" id="player">
       <video id="video" playsinline preload="auto"></video>
+      <div class="subs-layer" id="subs-layer" aria-live="polite"></div>
+      <div class="sub-panel" id="sub-panel" hidden>
+        <div class="sp-head"><b>Subtitles</b><button class="iconbtn" id="sp-close" title="Close">✕</button></div>
+        <label class="sp-row">Size <output id="sp-size-v"></output>
+          <input type="range" id="sp-size" min="50" max="250" step="5"></label>
+        <label class="sp-row">Height from bottom <output id="sp-pos-v"></output>
+          <input type="range" id="sp-pos" min="0" max="45" step="1"></label>
+        <label class="sp-row">Background
+          <select id="sp-bg"><option value="outline">Outline</option><option value="box">Shaded box</option><option value="none">None</option></select></label>
+        <label class="sp-row">Colour
+          <select id="sp-color"><option value="#ffffff">White</option><option value="#ffe55c">Yellow</option><option value="#9cf0ff">Light blue</option></select></label>
+        <button class="btn" id="sp-reset" type="button">Reset to default</button>
+      </div>
       <div class="overlay" id="overlay"><div class="box"><div class="spinner"></div><div id="ov-text">Loading…</div><div class="small muted" id="ov-sub"></div></div></div>
       <div class="p-top">
         <button class="iconbtn" id="back" title="Back (Esc)">←</button>
@@ -1254,6 +1267,7 @@ async function player(params, id, idxStr) {
           <span class="time" id="time">0:00 / --:--</span>
           <select id="audio" title="Audio track" hidden></select>
           <select id="subs" title="Subtitles" hidden></select>
+          <button class="iconbtn" id="substyle" title="Subtitle size and position" hidden>Aa</button>
           <select id="mode" title="Playback mode">
             <option value="direct">Direct</option>
             <option value="compat">Compatible (ffmpeg)</option>
@@ -1416,6 +1430,7 @@ async function player(params, id, idxStr) {
   const textSubs = (info?.subtitles || []).filter((s) => s.text);
   if (textSubs.length && state.ffmpeg) {
     ui.subs.hidden = false;
+    el('substyle').hidden = false;
     ui.subs.innerHTML = '<option value="-1">💬 Subtitles off</option>'
       + textSubs.map((s) => `<option value="${s.index}">💬 ${esc(langName(s.lang) || 'Unknown')}${s.title ? ` · ${esc(s.title)}` : ''}</option>`).join('');
     const prefLang = store.get('subLang', 'eng');
@@ -1446,13 +1461,80 @@ async function player(params, id, idxStr) {
     }
   };
 
-  // 3. Subtitle cues come from a growing WebVTT file on the server.
+  // 3. Subtitle cues come from a growing WebVTT file on the server. The track
+  // is kept hidden and its active cues are drawn in our own layer, because the
+  // browser's built-in cue rendering can't be moved or resized.
   const textTrack = video.addTextTrack('subtitles', 'Subtitles', 'en');
-  textTrack.mode = 'showing';
+  textTrack.mode = 'hidden';
+  const subsLayer = el('subs-layer');
+  const subPanel = el('sub-panel');
+  function renderCues() {
+    const active = [...(textTrack.activeCues || [])].sort((a, b) => a.startTime - b.startTime);
+    const lines = active.map((cue) => {
+      const span = document.createElement('span');
+      span.className = 'sub-text';
+      span.append(cue.getCueAsHTML()); // VTT markup (<i>, <b>…) parsed safely by the browser
+      return span;
+    });
+    // While the style panel is open, show a sample so changes are visible.
+    if (!lines.length && !subPanel.hidden) {
+      const span = document.createElement('span');
+      span.className = 'sub-text';
+      span.textContent = 'Subtitles will look like this';
+      lines.push(span);
+    }
+    subsLayer.replaceChildren(...lines.map((s) => { const d = document.createElement('div'); d.className = 'sub-line'; d.append(s); return d; }));
+  }
+  textTrack.addEventListener('cuechange', renderCues);
   const resetCues = () => {
     while (textTrack.cues && textTrack.cues.length) textTrack.removeCue(textTrack.cues[0]);
     state.cuesSeen = 0;
+    renderCues();
   };
+
+  // Subtitle size / height / background / colour, remembered across videos.
+  const SUB_DEFAULTS = { size: 100, pos: 6, bg: 'outline', color: '#ffffff' };
+  const subStyle = { ...SUB_DEFAULTS, ...store.get('subStyle', {}) };
+  const sp = { size: el('sp-size'), pos: el('sp-pos'), bg: el('sp-bg'), color: el('sp-color') };
+  function applySubStyle() {
+    const p = el('player');
+    p.style.setProperty('--sub-scale', subStyle.size / 100);
+    p.style.setProperty('--sub-pos', `${subStyle.pos}%`);
+    p.style.setProperty('--sub-color', subStyle.color);
+    p.dataset.subBg = subStyle.bg;
+    for (const k of Object.keys(sp)) sp[k].value = subStyle[k];
+    el('sp-size-v').textContent = `${subStyle.size}%`;
+    el('sp-pos-v').textContent = `${subStyle.pos}%`;
+  }
+  for (const [k, input] of Object.entries(sp)) {
+    input.addEventListener('input', () => {
+      subStyle[k] = k === 'size' || k === 'pos' ? Number(input.value) : input.value;
+      store.set('subStyle', subStyle);
+      applySubStyle();
+    });
+  }
+  el('sp-reset').onclick = () => {
+    Object.assign(subStyle, SUB_DEFAULTS);
+    store.set('subStyle', subStyle);
+    applySubStyle();
+  };
+  const toggleSubPanel = (open = subPanel.hidden) => {
+    subPanel.hidden = !open;
+    renderCues();
+    wake();
+  };
+  el('substyle').onclick = () => toggleSubPanel();
+  el('sp-close').onclick = () => toggleSubPanel(false);
+  // Keep the layer clear of the control bar while it is showing.
+  const measureControls = () => el('player').style.setProperty('--controls-h', `${el('player').querySelector('.p-bottom').offsetHeight}px`);
+  window.addEventListener('resize', measureControls);
+  const baseCleanup = cleanup;
+  cleanup = () => {
+    window.removeEventListener('resize', measureControls);
+    baseCleanup();
+  };
+  applySubStyle();
+  measureControls();
   const parseVttTime = (s) => {
     const p = s.trim().split(':').map(Number);
     return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
@@ -1622,6 +1704,7 @@ async function player(params, id, idxStr) {
     else if (e.key === 'ArrowRight') seek(now() + 10);
     else if (e.key === 'f') toggleFs();
     else if (e.key === 'm') video.muted = !video.muted;
+    else if (e.key === 'Escape' && !subPanel.hidden) toggleSubPanel(false);
     else if (e.key === 'Escape' && !document.fullscreenElement) goBack(backHash);
   }
   document.addEventListener('keydown', onKey);
@@ -1631,7 +1714,8 @@ async function player(params, id, idxStr) {
   const wake = () => {
     el('player').classList.remove('idle');
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (!video.paused) el('player').classList.add('idle'); }, 2500);
+    // Controls stay up while paused or while the subtitle panel is open.
+    idleTimer = setTimeout(() => { if (!video.paused && subPanel.hidden) el('player').classList.add('idle'); }, 2500);
   };
   el('player').addEventListener('mousemove', wake);
   wake();

@@ -228,7 +228,36 @@ body.playing .topbar { display: none; }
 body.playing main { padding: 0; max-width: none; }
 .player { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; }
 .player video { flex: 1; width: 100%; min-height: 0; background: #000; }
-.player video::cue { background: rgba(0, 0, 0, .55); color: #fff; font-family: "Segoe UI", sans-serif; font-size: 2.6vh; text-shadow: 0 0 4px #000; }
+/* Subtitles: drawn by app.js (renderCues) so they can be sized and moved.
+   Size follows the player's height; --sub-scale/--sub-pos/--sub-color come
+   from the subtitle panel. They lift above the control bar while it shows. */
+.subs-layer {
+  position: absolute; left: 4%; right: 4%; z-index: 1; pointer-events: none;
+  bottom: var(--sub-pos, 6%);
+  display: flex; flex-direction: column; align-items: center; gap: .12em;
+  font: 600 calc(4.4vh * var(--sub-scale, 1)) / 1.25 "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--sub-color, #fff); text-align: center; white-space: pre-line;
+  transition: bottom .25s ease;
+}
+.player:not(.idle) .subs-layer { bottom: max(var(--sub-pos, 6%), calc(var(--controls-h, 96px) + 8px)); }
+.sub-text { padding: 0 .3em; border-radius: .18em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.player[data-sub-bg="outline"] .sub-text {
+  text-shadow: 0 0 .1em #000, .05em .05em .08em #000, -.05em -.05em .08em #000, .05em -.05em .08em #000, -.05em .05em .08em #000;
+}
+.player[data-sub-bg="box"] .sub-text { background: rgba(0, 0, 0, .68); }
+.player[data-sub-bg="none"] .sub-text { text-shadow: 0 .04em .12em rgba(0, 0, 0, .6); }
+
+.sub-panel {
+  position: absolute; right: 20px; bottom: calc(var(--controls-h, 96px) + 10px); z-index: 3; width: 280px;
+  background: rgba(23, 20, 31, .96); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--text);
+}
+.sp-head { display: flex; justify-content: space-between; align-items: center; }
+.sp-row { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.sp-row output { color: var(--text); margin-left: 6px; }
+.sp-row input[type=range] { width: 100%; accent-color: var(--accent); }
+.sp-row select { background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--text); }
+.player.idle .sub-panel { display: none; }
 .p-top, .p-bottom { position: absolute; left: 0; right: 0; padding: 14px 20px; transition: opacity .25s; z-index: 2; }
 .p-top { top: 0; background: linear-gradient(#000c, #0000); display: flex; align-items: center; gap: 14px; }
 .p-top .ttl { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
