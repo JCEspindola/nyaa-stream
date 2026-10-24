@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { exec } from 'node:child_process';
 import express from 'express';
 import { addonRouter } from './addon.js';
-import { engineRouter, CACHE_ROOT } from './engine.js';
+import { engineRouter, useLocalFiles, CACHE_ROOT } from './engine.js';
 import { transcodeRouter, setLocalBase, FFMPEG, FFPROBE } from './transcode.js';
 import * as external from './external.js';
 import { libraryRouter } from './library.js';
 import { syncRouter, DATA_DIR } from './sync.js';
+import { offlineRouter, offlineFile } from './offline.js';
 
 let PORT = Number(process.env.PORT) || 11471;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -50,6 +51,8 @@ api.get('/playlist.m3u', (req, res) => {
 app.use('/api', api);
 app.use('/api', libraryRouter());
 app.use('/api', syncRouter());
+app.use('/api', offlineRouter());
+useLocalFiles(offlineFile);
 
 app.use(express.static(PUBLIC_DIR));
 

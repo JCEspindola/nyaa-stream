@@ -309,3 +309,42 @@ body.playing main { padding: 0; max-width: none; }
   .ep { grid-template-columns: 44px 1fr 40px; }
   .ep .size { display: none; }
 }
+
+/* Offline Catalog (Android app) */
+.off-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--muted); font-size: 13px; -webkit-tap-highlight-color: transparent; }
+.off-switch > i { position: relative; flex: none; width: 36px; height: 20px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line); transition: background .15s; }
+.off-switch > i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.off-switch.on { color: var(--text); }
+.off-switch.on > i { background: var(--accent); border-color: var(--accent); }
+.off-switch.on > i::after { transform: translateX(16px); background: #fff; }
+.off-switch.busy { opacity: .5; pointer-events: none; }
+.off-switch:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 6px; }
+.off-switch:not(.labeled) { flex-direction: column; gap: 2px; }
+.off-state { font-size: 11px; font-weight: 600; color: var(--accent-2); }
+.off-state:empty { display: none; }
+.off-line { margin: 12px 0 4px; }
+.off-col { text-align: center; }
+.row.trow.with-off { grid-template-columns: 1fr 84px 90px 70px 110px 64px; }
+.ep.with-off { grid-template-columns: 56px 1fr 90px 52px 40px; }
+.off-group { margin-top: 18px; }
+.off-ghead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.off-ghead img { width: 44px; height: 62px; object-fit: cover; border-radius: 4px; }
+.off-ghead h2 { margin: 0 0 2px; }
+.off-item { grid-template-columns: 56px 1fr auto; }
+.off-item:hover { border-color: var(--line); }
+.off-item .progress { margin-top: 6px; border-radius: 2px; }
+.off-item .t div.small { white-space: normal; }
+.off-item.failed .n { color: var(--bad); }
+.off-actions { display: flex; gap: 6px; }
+.off-actions .btn { white-space: nowrap; }
+.off-actions a.btn:hover { text-decoration: none; }
+.bad { color: var(--bad); }
+
+@media (max-width: 760px) {
+  .nav { overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+  .nav a { white-space: nowrap; padding: 6px 9px; }
+  .row.trow.with-off { grid-template-columns: 1fr 70px 44px 52px; }
+  .ep.with-off { grid-template-columns: 44px 1fr 52px 40px; }
+  .off-item { grid-template-columns: 44px 1fr; }
+  .off-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}

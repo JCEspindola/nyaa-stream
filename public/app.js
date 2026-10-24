@@ -5,6 +5,8 @@
 const ADDON = '/addon';
 // Inside the Android app, Java exposes window.NyaaAndroid (native player, files, clipboard).
 const ANDROID = !!window.NyaaAndroid;
+// Downloading videos to watch without a connection is an Android app feature.
+const OFFLINE = ANDROID;
 const view = document.getElementById('view');
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -73,6 +75,7 @@ const routes = [
   [/^#\/browse$/, discover],
   [/^#\/search$/, discover],
   [/^#\/library$/, libraryView],
+  [/^#\/offline$/, offlineView],
   [/^#\/continue$/, () => replaceHash('#/library')], // old tab address
   [/^#\/about$/, about],
   [/^#\/t\/(\d+)$/, detail],
@@ -360,32 +363,35 @@ async function seriesDetail(params, id) {
 const QUALITY_ORDER = ['2160p', '1440p', '1080p', '900p', '720p', '576p', '540p', '480p', '360p', 'BD', 'WEB', 'HDTV', 'DVD'];
 const sortQualities = (qs) => [...qs].sort((a, b) => (QUALITY_ORDER.indexOf(a) + 1 || 99) - (QUALITY_ORDER.indexOf(b) + 1 || 99));
 
-function torrentHead(withEpisode) {
-  return `<div class="row head trow"><div>Release</div><div class="qual">Quality</div><div class="num hide-sm">Size</div><div class="num">Seed</div><div class="num hide-sm">${withEpisode ? 'Type' : 'Date'}</div></div>`;
+function torrentHead(withEpisode, offline = false) {
+  return `<div class="row head trow${offline ? ' with-off' : ''}"><div>Release</div><div class="qual">Quality</div><div class="num hide-sm">Size</div><div class="num">Seed</div><div class="num hide-sm">${withEpisode ? 'Type' : 'Date'}</div>${offline ? '<div class="off-col">Offline</div>' : ''}</div>`;
 }
 
-function torrentRow(t, href, extra = '') {
-  return `<a class="row trow" href="${href}" title="${esc(t.title)}" ${extra}>
+function torrentRow(t, href, extra = '', offCell = '') {
+  return `<a class="row trow${offCell ? ' with-off' : ''}" href="${href}" title="${esc(t.title)}" ${extra}>
     <div class="title">${t.group ? `<span class="badge group">${esc(t.group)}</span>` : ''}${esc(t.title.replace(/^\s*\[[^\]]+\]\s*/, ''))}</div>
     <div class="qual"><span class="quality ${qualityClass(t.quality)}">${esc(t.quality)}</span></div>
     <div class="num hide-sm">${esc(t.size)}</div>
     <div class="num seed">${t.seeders}</div>
     <div class="num muted hide-sm">${t.batch ? `<span class="pill">pack${t.range ? ` ${t.range[0]}–${t.range[1]}` : ''}</span>` : esc((t.date || '').slice(0, 10))}</div>
+    ${offCell ? `<div class="off-col">${offCell}</div>` : ''}
   </a>`;
+}
+
+/** Which file of a torrent is this episode (fetches the .torrent's file list). */
+async function episodeFileIdx(nyaaId, ep) {
+  const { meta } = await addon('meta', 'series', `nyaa:${nyaaId}`);
+  const vids = meta.videos;
+  const match = vids.find((v) => v.episodeParsed && v.episode === ep && vids.length > 1)
+    || [...vids].sort((x, y) => y.length - x.length)[0];
+  if (!match) throw new Error('No video file in this torrent');
+  return match.fileIdx;
 }
 
 /** Open a torrent at the right file for an episode, then play it. */
 async function playEpisodeTorrent(t, seriesId, ep, bingeGroup, replace = false) {
-  let idx = t.fileIdx;
-  if (idx === undefined) {
-    // Single-episode torrents: look at the file list (fetches the .torrent).
-    const { meta } = await addon('meta', 'series', `nyaa:${t.id}`);
-    const vids = meta.videos;
-    const match = vids.find((v) => v.episodeParsed && v.episode === ep && vids.length > 1)
-      || [...vids].sort((x, y) => y.length - x.length)[0];
-    if (!match) throw new Error('No video file in this torrent');
-    idx = match.fileIdx;
-  }
+  // Season packs come with the file index; single-episode torrents need a look.
+  const idx = t.fileIdx ?? await episodeFileIdx(t.id, ep);
   const url = `#/play/${t.id}/${idx}?${new URLSearchParams({ series: seriesId, ep, bg: bingeGroup })}`;
   if (replace) replaceHash(url); else location.hash = url;
 }
@@ -404,6 +410,7 @@ async function episodeView(params, id, epStr) {
   const v = meta.videos.find((x) => x.episode === ep) || { episode: ep, title: `Episode ${ep}` };
   const hasPrev = ep > 1;
   const hasNext = meta.videos.some((x) => x.episode === ep + 1);
+  const epTitle = `Episode ${ep}${v.title && v.title !== `Episode ${ep}` ? `: ${v.title}` : ''}`;
   view.innerHTML = `${backButton(`#/series/${id}`)}
     <div class="ep-head">
       <div class="thumb lg">${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="">` : `<img src="${esc(meta.poster || '')}" alt="" class="fit">`}</div>
@@ -462,8 +469,12 @@ async function episodeView(params, id, epStr) {
     const shown = items.filter((t) => (!state.quality || t.quality === state.quality) && (!state.group || t.group === state.group));
     const singles = shown.filter((t) => !t.batch);
     const packs = shown.filter((t) => t.batch);
+    const offCell = (t) => (OFFLINE ? offlineSwitch({
+      nyaaId: t.id, idx: t.fileIdx ?? '', ep, title: epTitle,
+      series: { id: Number(id), name: meta.name, poster: meta.poster },
+    }) : '');
     const block = (title, list) => (list.length
-      ? `<h2>${title} (${list.length})</h2><div class="results">${torrentHead(true)}${list.map((t) => torrentRow(t, '#', `data-i="${items.indexOf(t)}"`)).join('')}</div>` : '');
+      ? `<h2>${title} (${list.length})</h2><div class="results">${torrentHead(true, OFFLINE)}${list.map((t) => torrentRow(t, '#', `data-i="${items.indexOf(t)}"`, offCell(t))).join('')}</div>` : '');
     $('#torrents').innerHTML = block('Episode releases', singles) + block('In season packs', packs)
       || '<div class="empty">No torrents match these filters.</div>';
   }
@@ -1129,13 +1140,17 @@ async function detail(params, id) {
   const progress = getProgress();
   const seasons = [...new Set(meta.videos.map((v) => v.season))];
   const multiSeason = seasons.length > 1;
+  // Offline Catalog: one labelled switch for a single video, one per row for packs.
+  const offInfo = (v) => ({ nyaaId: id, idx: v.fileIdx, ep: v.episodeParsed ? v.episode : null, title: v.title });
+  const rowSwitches = OFFLINE && meta.videos.length > 1;
   const epRow = (v) => {
     const p = progress[`${id}:${v.fileIdx}`];
     const pct = p?.d ? Math.min(100, (p.t / p.d) * 100) : 0;
-    return `<a class="ep" href="#/play/${id}/${v.fileIdx}" title="${esc(v.fileName)}">
+    return `<a class="ep${rowSwitches ? ' with-off' : ''}" href="#/play/${id}/${v.fileIdx}" title="${esc(v.fileName)}">
       <div class="n">${v.episodeParsed ? `E${String(v.episode).padStart(2, '0')}` : '▶'}</div>
       <div class="t"><div>${esc(v.title)}</div><div class="muted small">${esc(v.filePath)}</div></div>
       <div class="size muted small" style="text-align:right">${esc(v.size)}</div>
+      ${rowSwitches ? offlineSwitch(offInfo(v)) : ''}
       <div class="play">▶</div>
       ${pct ? `<i class="watched" style="width:${pct.toFixed(1)}%"></i>` : ''}
     </a>`;
@@ -1152,6 +1167,8 @@ async function detail(params, id) {
           <a href="${esc(meta.nyaa.url)}" target="_blank" rel="noopener">View on nyaa.si ↗</a>
         </div>
         ${meta.videos.length ? `<a class="btn primary" href="#/play/${id}/${resumeTarget(id, meta.videos).fileIdx}">${resumeLabel(id, meta.videos)}</a>` : ''}
+        ${OFFLINE && meta.videos.length === 1 ? `<div class="off-line">${offlineSwitch(offInfo(meta.videos[0]), true)}</div>` : ''}
+        ${rowSwitches ? '<div class="muted small off-line">Use the switch next to an episode to add it to the Offline Catalog.</div>' : ''}
         <div class="series-link" id="series-link"><span class="muted small">Finding which series this is…</span></div>
         <div class="desc" id="desc">${esc(meta.description)}</div>
       </div>
@@ -1202,6 +1219,266 @@ function resumeLabel(id, videos) {
   const label = v.episodeParsed ? `E${String(v.episode).padStart(2, '0')}` : '';
   return started ? `▶ Resume ${label}` : `▶ Play ${label}`;
 }
+
+// ---------- offline catalog (Android app) ----------
+// Videos downloaded whole to the device. The server keeps the files and the
+// list (src/offline.js); the UI shows them and adds or removes entries.
+let offlineItems = [];
+
+async function fetchOffline() {
+  const res = await fetch('/api/offline');
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `offline list failed (${res.status})`);
+  offlineItems = body.items;
+  return body;
+}
+
+// A cancelled download (status "failed") lost its file, so it counts as off.
+const offlineItemFor = (nyaaId, idx) => offlineItems.find((i) => i.nyaaId === String(nyaaId)
+  && i.status !== 'failed' && (idx === '' || idx === undefined || i.idx === Number(idx)));
+const offlineShort = (item) => (item.status === 'done' ? '✓' : `${Math.floor(item.progress * 100)}%`);
+
+/** info: { nyaaId, idx ('' when not known yet), ep, title, series? } */
+function offlineSwitch(info, labeled = false) {
+  const item = offlineItemFor(info.nyaaId, info.idx);
+  return `<span class="off-switch${item ? ' on' : ''}${labeled ? ' labeled' : ''}" role="switch" tabindex="0"
+    aria-checked="${!!item}" title="Add to Offline Catalog" data-off="${esc(JSON.stringify(info))}"><i></i>${labeled ? '<span>Add to Offline Catalog</span>' : ''}<b class="off-state">${item ? offlineShort(item) : ''}</b></span>`;
+}
+
+function refreshOfflineSwitches() {
+  for (const sw of document.querySelectorAll('.off-switch')) {
+    const info = JSON.parse(sw.dataset.off);
+    const item = offlineItemFor(info.nyaaId, info.idx);
+    sw.classList.toggle('on', !!item);
+    sw.setAttribute('aria-checked', String(!!item));
+    sw.querySelector('.off-state').textContent = item ? offlineShort(item) : '';
+  }
+}
+
+async function addOffline(info) {
+  const res = await fetch('/api/offline', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nyaaId: info.nyaaId, idx: info.idx, title: info.title, episode: info.ep, series: info.series }),
+  });
+  const body = await res.json().catch(() => ({}));
+  // 507: not enough free space on the device; nothing was downloaded.
+  if (!res.ok) throw new Error(res.status === 507 ? body.error : `Could not add it to the Offline Catalog: ${body.error || res.status}`);
+  // Keeps the app alive (with a notification) while downloads run.
+  window.NyaaAndroid?.watchDownloads?.();
+  return body;
+}
+
+function confirmRemoveOffline(item) {
+  const what = item.status === 'done' ? 'The downloaded video will be deleted from this device.'
+    : item.status === 'downloading' ? 'The download will be cancelled and its data deleted.' : '';
+  const name = item.series && item.episode ? `${item.series.name} episode ${item.episode}` : item.title;
+  return confirm(`Remove “${name}” from the Offline Catalog? ${what}`);
+}
+
+async function removeOffline(item) {
+  const res = await fetch(`/api/offline/${item.ih}/${item.idx}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Could not remove it (${res.status})`);
+}
+
+async function toggleOffline(sw) {
+  if (sw.classList.contains('busy')) return;
+  const info = JSON.parse(sw.dataset.off);
+  const item = offlineItemFor(info.nyaaId, info.idx);
+  sw.classList.add('busy');
+  try {
+    if (item) {
+      if (!confirmRemoveOffline(item)) return;
+      await removeOffline(item);
+    } else {
+      if (info.idx === '' || info.idx === undefined) {
+        info.idx = await episodeFileIdx(info.nyaaId, info.ep);
+        sw.dataset.off = JSON.stringify(info);
+      }
+      await addOffline(info);
+    }
+    await fetchOffline();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    sw.classList.remove('busy');
+    refreshOfflineSwitches();
+  }
+}
+
+if (OFFLINE) {
+  document.getElementById('nav-offline').hidden = false;
+  // Capture phase: the switch sits inside links and clickable rows, which must not react.
+  document.addEventListener('click', (e) => {
+    const sw = e.target.closest('.off-switch');
+    if (!sw) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleOffline(sw);
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('off-switch')) {
+      e.preventDefault();
+      toggleOffline(e.target);
+    }
+  });
+  // Switches on screen show the download's progress.
+  setInterval(() => {
+    const busy = [...document.querySelectorAll('.off-switch.on')].some((sw) => sw.querySelector('.off-state').textContent !== '✓');
+    if (busy && !document.hidden) fetchOffline().then(refreshOfflineSwitches, () => {});
+  }, 3000);
+  fetchOffline().then(refreshOfflineSwitches, () => {});
+}
+
+function offlineGroups(list) {
+  const groups = new Map();
+  for (const item of list) {
+    const key = item.series ? `s${item.series.id}` : `t${item.nyaaId}`;
+    const name = item.series?.name || item.torrentName.replace(/^\s*(\[[^\]]*\]\s*)+/, '').replace(/\.[a-z0-9]{2,4}$/i, '');
+    if (!groups.has(key)) groups.set(key, { key, name, series: item.series, items: [], latest: 0 });
+    const g = groups.get(key);
+    g.items.push(item);
+    g.latest = Math.max(g.latest, item.addedAt);
+  }
+  for (const g of groups.values()) g.items.sort((a, b) => (a.episode ?? 1e9) - (b.episode ?? 1e9) || a.addedAt - b.addedAt);
+  return [...groups.values()].sort((a, b) => b.latest - a.latest);
+}
+
+// Within a series, "Episode 5" says more than the release's file name.
+const offlineName = (item) => (item.series && item.episode && !/^episode\b/i.test(item.title) ? `Episode ${item.episode}` : item.title);
+
+function offlineRow(item) {
+  const p = getProgress()[`${item.nyaaId}:${item.idx}`];
+  const watched = p?.d ? Math.min(100, (p.t / p.d) * 100) : 0;
+  const pct = (item.progress * 100).toFixed(1);
+  let status;
+  if (item.status === 'done') status = `${esc(item.size)} · saved ${relTime(item.doneAt)}`;
+  else if (item.status === 'failed') status = `<span class="bad">${esc(item.error)}</span>`;
+  else if (!item.peers) status = `Waiting for peers… · ${pct}% of ${esc(item.size)}`;
+  else status = `Downloading ${pct}% of ${esc(item.size)} · ↓ ${fmtSpeed(item.speed)} · ${item.peers} peers`;
+  const action = item.status === 'done'
+    ? (ANDROID ? '<button class="btn primary" data-act="play">▶ Play</button>'
+      : `<a class="btn primary" href="/api/offline/${item.ih}/${item.idx}/file" target="_blank" rel="noopener">▶ Open</a>`)
+    : item.status === 'failed' ? '<button class="btn" data-act="retry">Retry</button>' : '';
+  const name = offlineName(item);
+  return `<div class="ep off-item ${item.status}" data-key="${esc(item.key)}" title="${esc(item.fileName)}">
+    <div class="n">${item.episode ? `E${String(item.episode).padStart(2, '0')}` : '▶'}</div>
+    <div class="t"><div>${esc(name)}</div><div class="muted small">${status}</div>
+      ${item.status === 'downloading' ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ''}</div>
+    <div class="off-actions">${action}<button class="btn danger" data-act="remove">Remove</button></div>
+    ${watched ? `<i class="watched" style="width:${watched.toFixed(1)}%"></i>` : ''}
+  </div>`;
+}
+
+/** Play a downloaded video in the native player; progress is kept as for streams. */
+function playOffline(item, done) {
+  const key = `${item.nyaaId}:${item.idx}`;
+  const saved = getProgress()[key];
+  const resumeAt = saved && saved.d && saved.t < saved.d - 30 ? saved.t : 0;
+  const title = item.series ? `${item.series.name} · ${offlineName(item)}` : item.title;
+  window.nyaaNativeResult = (r) => {
+    window.nyaaNativeResult = null;
+    const d = r.duration > 0 ? r.duration / 1000 : null;
+    const t = r.finished && d ? d : r.position / 1000;
+    if (t >= 5) {
+      if (item.series && item.episode) {
+        saveProgress(key, { t, d, title, show: item.series.name, series: item.series.id, ep: item.episode, bg: '' });
+        saveProgress(`anilist:${item.series.id}:${item.episode}`, { t, d });
+      } else {
+        saveProgress(key, { t, d, title, show: item.title });
+      }
+    }
+    if (r.error) alert(r.error);
+    // Finished: carry on with the next episode if it is downloaded too.
+    const next = r.finished && item.series && item.episode && offlineItems.find((i) => i.status === 'done'
+      && i.series?.id === item.series.id && i.episode === item.episode + 1);
+    if (next) playOffline(next, done); else done();
+  };
+  window.NyaaAndroid.play(JSON.stringify({
+    url: new URL(`/api/offline/${item.ih}/${item.idx}/file`, location.href).href,
+    title,
+    startMs: Math.round(resumeAt * 1000),
+    subLang: store.get('subLang', 'eng'),
+  }));
+}
+
+async function offlineView() {
+  const restore = restoring;
+  view.innerHTML = '<div class="empty"><div class="spinner"></div>Loading your Offline Catalog…</div>';
+  let alive = true;
+  let timer = null;
+  cleanup = () => { alive = false; clearTimeout(timer); view.onclick = null; };
+
+  async function load() {
+    clearTimeout(timer);
+    let body;
+    try {
+      body = await fetchOffline();
+    } catch (err) {
+      if (alive) view.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      return;
+    }
+    if (!alive) return;
+    render(body);
+    // Downloads in progress: keep the numbers moving.
+    if (body.downloading) timer = setTimeout(load, 2000);
+  }
+
+  function render(body) {
+    const groups = offlineGroups(body.items);
+    const count = body.items.filter((i) => i.status === 'done').length;
+    const space = [`${count} video${count === 1 ? '' : 's'} saved`];
+    if (body.used) space.push(`${fmtBytes(body.used)} used`);
+    if (body.free !== null) space.push(`${fmtBytes(body.free)} free on this device`);
+    view.innerHTML = `<div class="lib-head"><div><h1>Offline Catalog</h1>
+      <div class="muted small">${space.join(' · ')}</div></div></div>
+      ${!navigator.onLine ? '<div class="notice small">You are offline. Videos saved here can still be watched.</div>' : ''}
+      ${groups.length ? groups.map((g) => `<section class="off-group">
+        <div class="off-ghead">
+          ${g.series?.hasPoster ? `<img src="/api/offline/poster/${g.series.id}" alt="">` : ''}
+          <div><h2>${esc(g.name)}</h2>
+            <div class="muted small">${g.items.length} video${g.items.length === 1 ? '' : 's'}${g.series ? ` · <a href="#/series/${g.series.id}">Series page</a>` : ''}</div></div>
+        </div>
+        <div class="episodes">${g.items.map(offlineRow).join('')}</div>
+      </section>`).join('')
+      : `<div class="empty">Nothing saved for offline yet.<br>Open a torrent (from a series episode or Browse torrents) and switch on
+        <b>Add to Offline Catalog</b>. It downloads in the background and appears here, ready to watch without a connection.</div>`}`;
+  }
+
+  view.onclick = async (e) => {
+    const btn = e.target.closest('[data-act]');
+    const row = btn?.closest('[data-key]');
+    if (!row) return;
+    const item = offlineItems.find((i) => i.key === row.dataset.key);
+    if (!item) return;
+    if (btn.dataset.act === 'play') {
+      playOffline(item, () => { if (alive) load(); });
+      return;
+    }
+    btn.disabled = true;
+    try {
+      if (btn.dataset.act === 'remove') {
+        if (!confirmRemoveOffline(item)) return;
+        await removeOffline(item);
+      } else if (btn.dataset.act === 'retry') {
+        await addOffline({ nyaaId: item.nyaaId, idx: item.idx });
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+    load();
+  };
+  await load();
+  finishRestore(restore, () => alive);
+}
+
+const fmtBytes = (n) => {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(Math.max(n, 1)) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i > 2 ? 1 : 0)} ${u[i]}`;
+};
 
 // ---------- player ----------
 function fmtTime(s) {
@@ -1756,4 +2033,6 @@ async function about() {
   </div>`;
 }
 
+// Started without a connection: the downloaded videos are what can be watched.
+if (OFFLINE && !navigator.onLine && currentHash() === '#/') history.replaceState(null, '', '#/offline');
 route();

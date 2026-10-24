@@ -1,5 +1,6 @@
 package com.nyaastream.app;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ClipData;
@@ -7,6 +8,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.net.Uri;
@@ -40,9 +42,12 @@ import java.nio.charset.StandardCharsets;
  * as the desktop version in a WebView. Video plays in {@link PlayerActivity}.
  */
 public class MainActivity extends Activity {
+    /** Intent extra: a page (URL hash) to show, e.g. from the download notification. */
+    public static final String EXTRA_OPEN = "open";
     private static final int REQ_PLAYER = 1;
     private static final int REQ_SAVE_FILE = 2;
     private static final int REQ_PICK_FILE = 3;
+    private static final int REQ_NOTIFICATIONS = 4;
 
     private WebView webView;
     private TextView splash;
@@ -134,7 +139,10 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(1000);
                     c.setReadTimeout(1000);
                     if (c.getResponseCode() == 200) {
-                        main.post(() -> webView.loadUrl(NodeRunner.BASE_URL + "/"));
+                        String open = getIntent().getStringExtra(EXTRA_OPEN);
+                        main.post(() -> webView.loadUrl(NodeRunner.BASE_URL + "/" + (open != null ? open : "")));
+                        // Downloads left running when the app was last closed carry on.
+                        DownloadService.startIfActive(this);
                         return;
                     }
                 } catch (Exception ignored) {
@@ -150,6 +158,13 @@ public class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String open = intent.getStringExtra(EXTRA_OPEN);
+        if (open != null && open.matches("#/[a-z]+")) webView.evaluateJavascript("location.hash = '" + open + "'", null);
     }
 
     @Override
@@ -219,6 +234,17 @@ public class MainActivity extends Activity {
                     .setType("application/json")
                     .putExtra(Intent.EXTRA_TITLE, name);
                 startActivityForResult(i, REQ_SAVE_FILE);
+            });
+        }
+
+        /** A download was added to the Offline Catalog: keep the app running until it finishes. */
+        @JavascriptInterface
+        public void watchDownloads() {
+            main.post(() -> {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIFICATIONS);
+                }
+                DownloadService.start(MainActivity.this);
             });
         }
 

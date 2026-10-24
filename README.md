@@ -116,6 +116,24 @@ keeps nothing per user. Two ways to keep them safe or take them elsewhere:
 Synced copies are files in `~/.nyaa-stremio/sync/` (set `DATA_DIR` to move them), named
 by a hash of the code, so a copy of that folder doesn't reveal working codes.
 
+## Offline Catalog (Android app)
+
+Torrent pages, and each release on a series' episode page, have an **Add to Offline
+Catalog** switch (off by default). Switching it on downloads the whole video to the
+phone; season packs get one switch per episode. Downloads keep running in the background
+with a progress notification, and resume when the app is reopened.
+
+The **Offline Catalog** tab lists saved videos grouped by series, with download progress,
+**Play** (no connection needed; the app opens here when started offline) and **Remove**,
+which deletes the file from the device. Switching the toggle off does the same.
+
+Before downloading, the app checks free space and refuses with a warning when the video
+does not fit (keeping 200 MB free for the phone). If space runs out during a download, it
+is cancelled, its partial data is deleted, and the app warns with a notification.
+
+Files are kept in the app's private storage (`files/data/offline`); uninstalling the app
+deletes them.
+
 ## Browsing
 
 The **Browse torrents** tab lists the latest uploads, sortable by date, seeders,
@@ -167,6 +185,10 @@ Keys: Space play/pause · ←/→ 10 s · F fullscreen · M mute · Esc back.
 | `PUT /api/sync/{code}` | Save `{baseRev, data}`; 409 with the current copy if `baseRev` is outdated |
 | `DELETE /api/sync/{code}` | Delete the synced copy |
 | `GET /api/resolve-series?title=…` | Catalog series a release name belongs to |
+| `GET /api/offline` | Offline Catalog: saved and downloading videos, free space |
+| `POST /api/offline` | Download `{nyaaId, idx, title?, episode?, series?}`; 507 when it does not fit |
+| `DELETE /api/offline/{infoHash}/{fileIdx}` | Cancel or remove, deleting the file |
+| `GET /api/offline/{infoHash}/{fileIdx}/file` | A saved file (Range supported) |
 | `GET /transcode/{infoHash}/{fileIdx}/probe.json` | Codecs, duration, audio/subtitle tracks |
 | `GET /transcode/{infoHash}/{fileIdx}/video.mp4?t=&a=&s=&sid=&hevc=` | Browser-safe stream |
 

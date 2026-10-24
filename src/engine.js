@@ -32,11 +32,17 @@ const IH_RE = /^[0-9a-f]{40}$/i;
 
 // Peer IDs that look like common clients, like Stremio's spoofedPeerId().
 const CLIENT_PREFIXES = ['qB4600', 'DE2110', 'AZ5770', 'TR4040'];
-function spoofedPeerId() {
+export function spoofedPeerId() {
   const prefix = CLIENT_PREFIXES[Math.floor(Math.random() * CLIENT_PREFIXES.length)];
   let rand = '';
   while (rand.length < 12) rand += Math.random().toString(36).slice(2);
   return `-${prefix}-${rand.slice(0, 12)}`;
+}
+
+// Files kept on the device (Offline Catalog) are served from disk instead.
+let localFile = () => null;
+export function useLocalFiles(resolve) {
+  localFile = resolve;
 }
 
 /** infoHash -> { engine, ready: Promise, open: Map<idx, count>, timers } */
@@ -240,6 +246,8 @@ export function engineRouter() {
 
 // Port of EngineFS handleTorrent: resolve the file and serve byte ranges.
 async function handleTorrent(req, res) {
+  const local = localFile(req.ih, Number(req.params.idx));
+  if (local) return res.sendFile(local, { headers: { 'Content-Type': mime.lookup(local) || 'application/octet-stream', 'Cache-Control': 'max-age=0, no-cache' } });
   let engine;
   try {
     engine = await createEngine(req.ih);
