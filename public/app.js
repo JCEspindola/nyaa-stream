@@ -444,7 +444,8 @@ async function episodeView(params, id, epStr) {
 
   // Binge-watching: the player sends us here with the previous episode's
   // group+quality; jump straight to the matching release if there is one.
-  if (params.auto) {
+  // Not when coming back to this page: the list was shown because none matched.
+  if (params.auto && !restore) {
     const same = items.find((t) => t.bingeGroup === params.auto);
     if (same) {
       $('#torrents').innerHTML = `<div class="empty"><div class="spinner"></div>Opening ${esc(same.group || 'release')} ${esc(same.quality)}…</div>`;
@@ -1597,6 +1598,8 @@ async function player(params, id, idxStr) {
   const series = params.series ? { id: params.series, ep: Number(params.ep), bg: params.bg || '' } : null;
   const backHash = series ? `#/series/${series.id}/${series.ep}` : `#/t/${id}`;
   // History-aware, so the page we return to keeps its filters and scroll.
+  // Next episode replaces this page in history, so after any number of
+  // episodes Back still returns to the page the first one was picked from.
   el('back').onclick = () => goBack(backHash);
 
   // 1. Meta + stream from the addon, as Stremio does.
@@ -1626,7 +1629,7 @@ async function player(params, id, idxStr) {
     el('ttl').textContent = `${sm.name} · Episode ${series.ep}${epTitle}`;
     if (next) {
       // Like Stremio's bingeGroup: prefer the same fansub and quality next time.
-      goNext = () => { location.hash = `#/series/${series.id}/${next.episode}?${new URLSearchParams({ auto: series.bg })}`; };
+      goNext = () => replaceHash(`#/series/${series.id}/${next.episode}?${new URLSearchParams({ auto: series.bg })}`);
       ui.next.title = `Next: Episode ${next.episode}`;
     }
   } else {
@@ -1635,7 +1638,7 @@ async function player(params, id, idxStr) {
     const nextEntry = state.meta.videos[vIndex + 1];
     el('ttl').textContent = videoEntry ? `${videoEntry.title}` : state.stream.behaviorHints.filename;
     if (nextEntry) {
-      goNext = () => { location.hash = `#/play/${id}/${nextEntry.fileIdx}`; };
+      goNext = () => replaceHash(`#/play/${id}/${nextEntry.fileIdx}`);
       ui.next.title = `Next: ${nextEntry.title}`;
     }
   }
