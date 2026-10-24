@@ -1,6 +1,9 @@
-## What's new in 1.0.1
+## What's new in 1.0.2
 
-- **Subtitle settings in the Windows/browser player:** the new **Aa** button next to the subtitle menu lets you change the size, position (height from the bottom), background (outline, box or none) and colour. Settings are remembered, and subtitles move up out of the way while the controls are visible.
+- **Offline Catalog (Android):** torrent pages, and each release on a series' episode page, now have an **Add to Offline Catalog** switch (off by default; one per episode for season packs). Switching it on downloads the video to your phone, in the background, with a progress notification. Downloads continue where they left off if the app is closed.
+- A new **Offline Catalog** tab lists your saved videos grouped by series, with **Play** (works with no internet; the app opens on this tab when started offline) and **Remove**, which deletes the file from the phone.
+- Free space is checked first: if a video doesn't fit (the app keeps 200 MB free for the phone), it isn't downloaded and you're told why. If space runs out partway through, the download is cancelled, its partial data is deleted and a notification tells you.
+- On Android 13 and newer the app asks for permission to show notifications the first time you download something.
 
 ## Downloads
 

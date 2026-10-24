@@ -1,6 +1,6 @@
 {
   "name": "nyaa-stremio",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A simplified Stremio clone that streams torrents from nyaa.si",
   "main": "src/index.js",
   "directories": {
