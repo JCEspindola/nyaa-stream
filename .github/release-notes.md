@@ -1,3 +1,7 @@
+## What's new in 1.0.1
+
+- **Subtitle settings in the Windows/browser player:** the new **Aa** button next to the subtitle menu lets you change the size, position (height from the bottom), background (outline, box or none) and colour. Settings are remembered, and subtitles move up out of the way while the controls are visible.
+
 ## Downloads
 
 | File | For |
