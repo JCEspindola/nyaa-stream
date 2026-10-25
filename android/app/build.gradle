@@ -19,7 +19,8 @@ android {
         versionName pkg.version
         externalNativeBuild {
             cmake {
-                arguments '-DANDROID_STL=c++_shared'
+                // 16 KB page alignment, needed on devices with 16 KB memory pages.
+                arguments '-DANDROID_STL=c++_shared', '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
             }
         }
     }
