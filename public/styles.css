@@ -230,19 +230,26 @@ body.playing main { padding: 0; max-width: none; }
 .player video { flex: 1; width: 100%; min-height: 0; background: #000; }
 /* Subtitles: drawn by app.js (renderCues) so they can be sized and moved.
    Size follows the player's height; --sub-scale/--sub-pos/--sub-color come
-   from the subtitle panel. They lift above the control bar while it shows. */
+   from the subtitle panel. They lift above the control bar while it shows
+   (--sub-lift, set by app.js).
+   In fullscreen, browsers draw the video on a separate hardware plane and
+   blend the page over it; blurred multi-shadow text and per-frame relayout
+   garble letters there. So the layer gets its own compositing layer, moves
+   with transform, and the outline is a stroke rather than stacked blurs. */
 .subs-layer {
   position: absolute; left: 4%; right: 4%; z-index: 1; pointer-events: none;
   bottom: var(--sub-pos, 6%);
   display: flex; flex-direction: column; align-items: center; gap: .12em;
   font: 600 calc(4.4vh * var(--sub-scale, 1)) / 1.25 "Segoe UI", system-ui, -apple-system, sans-serif;
   color: var(--sub-color, #fff); text-align: center; white-space: pre-line;
-  transition: bottom .25s ease;
+  will-change: transform;
+  transition: transform .25s ease;
 }
-.player:not(.idle) .subs-layer { bottom: max(var(--sub-pos, 6%), calc(var(--controls-h, 96px) + 8px)); }
+.player:not(.idle) .subs-layer { transform: translateY(calc(-1 * var(--sub-lift, 0px))); }
 .sub-text { padding: 0 .3em; border-radius: .18em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .player[data-sub-bg="outline"] .sub-text {
-  text-shadow: 0 0 .1em #000, .05em .05em .08em #000, -.05em -.05em .08em #000, .05em -.05em .08em #000, -.05em .05em .08em #000;
+  -webkit-text-stroke: .14em #000; paint-order: stroke fill;
+  text-shadow: 0 .03em .1em rgba(0, 0, 0, .55);
 }
 .player[data-sub-bg="box"] .sub-text { background: rgba(0, 0, 0, .68); }
 .player[data-sub-bg="none"] .sub-text { text-shadow: 0 .04em .12em rgba(0, 0, 0, .6); }

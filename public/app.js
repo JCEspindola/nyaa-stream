@@ -1565,7 +1565,7 @@ async function player(params, id, idxStr) {
   };
   const state = {
     meta: null, stream: null, info: null, mode: 'direct', offset: 0, audio: 0, sub: -1,
-    sid: Math.random().toString(36).slice(2, 12), cuesSeen: 0, alive: true, ffmpeg: false, triedCompat: false,
+    sid: Math.random().toString(36).slice(2, 12), cuesSeen: 0, subFrom: 0, subHead: 0, subGen: 0, alive: true, ffmpeg: false, triedCompat: false,
   };
   const timers = [];
   const showOverlay = (text, sub = '') => {
@@ -1766,8 +1766,10 @@ async function player(params, id, idxStr) {
     subsLayer.replaceChildren(...lines.map((s) => { const d = document.createElement('div'); d.className = 'sub-line'; d.append(s); return d; }));
   }
   textTrack.addEventListener('cuechange', renderCues);
+  const cueByKey = new Map(); // "start|end" -> VTTCue, so re-read cues aren't added twice
   const resetCues = () => {
     while (textTrack.cues && textTrack.cues.length) textTrack.removeCue(textTrack.cues[0]);
+    cueByKey.clear();
     state.cuesSeen = 0;
     renderCues();
   };
@@ -1791,12 +1793,14 @@ async function player(params, id, idxStr) {
       subStyle[k] = k === 'size' || k === 'pos' ? Number(input.value) : input.value;
       store.set('subStyle', subStyle);
       applySubStyle();
+      measureControls();
     });
   }
   el('sp-reset').onclick = () => {
     Object.assign(subStyle, SUB_DEFAULTS);
     store.set('subStyle', subStyle);
     applySubStyle();
+    measureControls();
   };
   const toggleSubPanel = (open = subPanel.hidden) => {
     subPanel.hidden = !open;
@@ -1805,8 +1809,14 @@ async function player(params, id, idxStr) {
   };
   el('substyle').onclick = () => toggleSubPanel();
   el('sp-close').onclick = () => toggleSubPanel(false);
-  // Keep the layer clear of the control bar while it is showing.
-  const measureControls = () => el('player').style.setProperty('--controls-h', `${el('player').querySelector('.p-bottom').offsetHeight}px`);
+  // Keep the layer clear of the control bar while it is showing: lift it by
+  // however much the bar would overlap its chosen height.
+  const measureControls = () => {
+    const p = el('player');
+    const bar = p.querySelector('.p-bottom').offsetHeight;
+    p.style.setProperty('--controls-h', `${bar}px`);
+    p.style.setProperty('--sub-lift', `${Math.max(0, bar + 8 - (subStyle.pos / 100) * p.clientHeight)}px`);
+  };
   window.addEventListener('resize', measureControls);
   const baseCleanup = cleanup;
   cleanup = () => {
@@ -1821,24 +1831,43 @@ async function player(params, id, idxStr) {
   };
   let subsBusy = false;
   async function pollSubs() {
-    if (state.sub < 0 || subsBusy) return;
+    if (state.sub < 0 || subsBusy || state.subGen < 0) return;
     subsBusy = true;
+    // A restarted extraction replaces the file; drop a read of the old one.
+    const gen = state.subGen;
     try {
       const r = await fetch(`/transcode/session/${state.sid}/subs.vtt`, { cache: 'no-store' });
       if (!r.ok) return;
-      const blocks = (await r.text()).replace(/\r/g, '').split(/\n\n+/).filter((b) => b.includes('-->'));
-      // The last block may be half-written; leave it for the next poll.
-      const complete = r.headers.get('X-Extracting') === 'true' ? blocks.slice(0, -1) : blocks;
-      for (const block of complete.slice(state.cuesSeen)) {
-        const lines = block.split('\n');
+      const body = (await r.text()).replace(/\r/g, '');
+      if (gen !== state.subGen) return;
+      const blocks = body.split(/\n\n+/).filter((b) => b.includes('-->'));
+      // While ffmpeg is still writing, the last block may be half-written. Show
+      // it anyway (a cue can wait minutes for the next one), but read it again
+      // next poll in case its text grows.
+      const extracting = r.headers.get('X-Extracting') === 'true';
+      const settled = extracting ? blocks.length - 1 : blocks.length;
+      for (const block of blocks.slice(state.cuesSeen)) {
+        const lines = block.trim().split('\n');
         const ti = lines.findIndex((l) => l.includes('-->'));
         const [a, b] = lines[ti].split('-->');
         const text = lines.slice(ti + 1).join('\n');
-        // ffmpeg's -ss makes compat-mode cue times relative to the seek offset,
-        // matching the <video> clock, so no shift is needed in either mode.
-        try { textTrack.addCue(new VTTCue(parseVttTime(a), parseVttTime(b.trim().split(' ')[0]), text)); } catch { /* bad cue */ }
+        if (!text) continue;
+        // Direct mode extracts with -copyts and compat mode with -ss, so cue
+        // times match the <video> clock in both: no shift needed.
+        const start = parseVttTime(a);
+        const end = parseVttTime(b.trim().split(' ')[0]);
+        const key = `${start}|${end}`;
+        const old = cueByKey.get(key);
+        if (old?.text === text) continue;
+        if (old) textTrack.removeCue(old);
+        try {
+          const cue = new VTTCue(start, end, text);
+          textTrack.addCue(cue);
+          cueByKey.set(key, cue);
+          state.subHead = Math.max(state.subHead, end);
+        } catch { /* bad cue */ }
       }
-      state.cuesSeen = Math.max(state.cuesSeen, complete.length);
+      state.cuesSeen = Math.max(state.cuesSeen, settled);
     } catch { /* retry next tick */ } finally {
       subsBusy = false;
     }
@@ -1849,11 +1878,25 @@ async function player(params, id, idxStr) {
   const now = () => (state.mode === 'compat' ? state.offset + video.currentTime : video.currentTime);
   const duration = () => info?.duration || (Number.isFinite(video.duration) ? video.duration : NaN);
 
-  function startSubsDirect() {
-    resetCues();
+  // Direct mode: extraction starts at the playback position and restarts when
+  // a seek lands outside what it has covered. Cues already loaded are kept.
+  function startSubsDirect(t = video.currentTime) {
+    const gen = ++state.subGen;
+    state.cuesSeen = 0;
+    state.subFrom = t;
+    state.subHead = t;
     if (state.sub < 0) return;
-    fetch(`/transcode/${ih}/${idx}/subs?s=${state.sub}&sid=${state.sid}`, { method: 'POST' }).catch(() => {});
+    // Until the server has replaced the file, polls would read the old one.
+    state.subGen = -gen;
+    fetch(`/transcode/${ih}/${idx}/subs?s=${state.sub}&sid=${state.sid}&t=${t.toFixed(2)}`, { method: 'POST' })
+      .catch(() => {})
+      .finally(() => { if (state.subGen === -gen) state.subGen = gen; });
   }
+  video.addEventListener('seeking', () => {
+    if (state.mode !== 'direct' || state.sub < 0) return;
+    const t = video.currentTime;
+    if (t < state.subFrom - 1 || t > state.subHead + 30) startSubsDirect(t);
+  });
 
   function load(mode, t = 0) {
     state.mode = mode;
@@ -1864,7 +1907,7 @@ async function player(params, id, idxStr) {
       state.offset = 0;
       video.src = engineUrl;
       video.currentTime = t;
-      startSubsDirect();
+      startSubsDirect(t);
     } else {
       state.offset = t;
       const q = new URLSearchParams({ t: t.toFixed(2), a: state.audio, sid: state.sid, hevc: hevcSupported() ? '1' : '0' });
@@ -1974,7 +2017,7 @@ async function player(params, id, idxStr) {
     const s = info.subtitles[state.sub];
     if (s?.lang) store.set('subLang', s.lang);
     if (state.mode === 'compat') load('compat', now());
-    else startSubsDirect();
+    else { resetCues(); startSubsDirect(); }
   };
 
   function onKey(e) {

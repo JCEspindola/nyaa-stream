@@ -217,9 +217,11 @@ export function transcodeRouter() {
     });
   });
 
-  // Subtitles for direct play: read the whole file once, in order, writing cues
-  // as they appear. Playback from the start stays ahead of the extraction as
-  // long as the swarm downloads faster than real time.
+  // Subtitles for direct play: read the file in order from t (the playback
+  // position), writing cues as they appear. Starting at t matters: the torrent
+  // downloads around the playhead, so reading from byte 0 after a resume or
+  // seek would wait on pieces nobody asked for. -copyts keeps cue times
+  // absolute, matching the <video> clock.
   router.post('/:ih/:idx/subs', async (req, res) => {
     if (!FFMPEG) return res.status(501).json({ error: 'ffmpeg not found' });
     try {
@@ -229,8 +231,10 @@ export function transcodeRouter() {
       const sub = Number(req.query.s);
       const info = await probe(ih, idx);
       if (!info.subtitles[sub]?.text) return res.status(400).json({ error: 'not a text subtitle track' });
+      const t = Math.max(0, Number(req.query.t) || 0);
       for (const p of s.procs) p.kill('SIGKILL');
-      const args = ['-hide_banner', '-loglevel', 'error', '-i', fileUrl(ih, idx), ...subtitleOutput(s, sub)];
+      const seek = t > 0 ? ['-ss', t.toFixed(2), '-copyts'] : [];
+      const args = ['-hide_banner', '-loglevel', 'error', ...seek, '-i', fileUrl(ih, idx), ...subtitleOutput(s, sub)];
       track(s, spawn(FFMPEG, args, { stdio: ['ignore', 'ignore', 'pipe'] }), `subs ${ih.slice(0, 8)}:${idx}`);
       res.json({ ok: true });
     } catch (err) {
