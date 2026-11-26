@@ -1,7 +1,7 @@
-## What's new in 1.0.3
+## What's new in 1.0.4
 
-- **Back from the player goes where you started:** after watching several episodes in a row with Next (or auto-play), Back now returns straight to the page where you picked the first one, instead of stepping back through every episode. Works the same in the Windows/browser player and the Android app, including the phone's Back button.
-- **Android, devices with 16 KB memory pages:** the app's own native code is now built for them. The bundled Node.js runtime isn't yet (waiting on an upstream release), so Android may still show an "isn't 16 KB compatible" notice when the app opens; tap OK and the app works normally.
+- **Subtitles work again after resuming or skipping ahead (Windows/browser player):** subtitles were read from the start of the file, so when you continued an episode partway through or jumped ahead they never caught up and nothing showed. They now load from where you are watching, and again after any jump. The newest line also appears right away instead of waiting for the next one.
+- **Steadier subtitles in fullscreen:** the "Outline" style now uses a solid outline instead of stacked blurred shadows, and subtitles slide smoothly above the controls, which should stop letters from glitching in fullscreen.
 
 ## Downloads
 
